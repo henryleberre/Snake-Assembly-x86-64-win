@@ -2,6 +2,7 @@
     global _window_proc
     global _set_timer_callback
 
+    ; This is getting ridiculous
     extern GetModuleHandleA
     extern RegisterClassA
     extern DefWindowProcA
@@ -23,6 +24,9 @@
     extern GlobalFree
     extern AdjustWindowRect
     extern SetTimer
+    extern LoadCursorA
+    extern CreateIcon
+    extern DestroyIcon
 
 %define BLOCK_SIDE_LEN  10
 %define BLOCKS_PER_SIDE 50
@@ -128,15 +132,30 @@ _start:
     CALL GetModuleHandleA
     MOV  QWORD[HINSTANCE], RAX ; Save hInstance
 
+    ; Create The Icon
+    MOV  RCX, RAX ; HINSTANCE
+    MOV  RDX, 16  ; WIDTH
+    MOV  R8,  16  ; HEIGHT
+    MOV  R9,  1   ; # of XOR planes 
+    MOV  QWORD[rsp + 32],      1
+    MOV  QWORD[rsp + 40],      ICON_AND_BIT_MASK
+    MOV  QWORD[rsp + 48],      ICON_XOR_BIT_MASK
+    CALL CreateIcon
+    MOV  QWORD[HICON],         RAX             ; Save the HICON
+
     ; Create WNDCLASSA
     MOV  DWORD[rsp + 32],      3               ; style
     MOV  QWORD[rsp + 32 + 8],  _window_proc    ; lpfnWndProc
-    MOV  DWORD[rsp + 32 + 12], 0               ; cbClsExtra
-    MOV  DWORD[rsp + 32 + 16], 0               ; cbWndExtra
+    MOV  DWORD[rsp + 32 + 16], 0               ; cbClsExtra
+    MOV  DWORD[rsp + 32 + 20], 0               ; cbWndExtra
     MOV  RAX, QWORD[HINSTANCE]
     MOV  QWORD[rsp + 32 + 24], RAX             ; hInstance
-    MOV  QWORD[rsp + 32 + 32], 0               ; hIcon
-    MOV  QWORD[rsp + 32 + 40], 0               ; hCursor
+    MOV  RAX, QWORD[HICON]
+    MOV  QWORD[rsp + 32 + 32], RAX             ; hIcon
+    XOR  RCX, RCX   ; HINSTANCE=NULL
+    MOV  RDX, 32515 ; IDC_CROSS
+    CALL LoadCursorA
+    MOV  QWORD[rsp + 32 + 40], RAX             ; hCursor
     MOV  QWORD[rsp + 32 + 48], 0               ; hbrBackground
     MOV  QWORD[rsp + 32 + 56], 0               ; lpszMenuName
     MOV  QWORD[rsp + 32 + 64], WindowClassName ; lpszClassName
@@ -255,6 +274,10 @@ _start_epilogue:
     MOV  RCX, QWORD[SNAKE_BUFFER_PTR]
     CALL GlobalFree
 
+    ; Destroy The Icon
+    MOV  RCX, QWORD[HICON]
+    CALL DestroyIcon
+
     ; Usual Epilogue
     MOV	 RSP, RBP
     POP	 RBP
@@ -298,7 +321,7 @@ _window_proc_paint_begin:
 
 _window_proc_paint_draw_backgroud:
     ; Create Background Color Brush
-    MOV  RCX, 0x00333333
+    MOV  RCX, 0x00000000 ; 0x00BBGGRR
     CALL CreateSolidBrush
 
     ; Draw Background
@@ -312,7 +335,7 @@ _window_proc_paint_draw_backgroud:
 
 _window_proc_paint_draw_apple:
     ; Create Apple Color Brush
-    MOV  RCX, 0x000000FF
+    MOV  RCX, 0x000000FF ; 0x00BBGGRR
     CALL CreateSolidBrush
 
     ; Create Apple Struct: TODO:: OPTIMIZE GETTING FULL QWORD FROM APPLE (X;Y)
@@ -339,7 +362,7 @@ _window_proc_paint_draw_apple:
 
 _window_proc_paint_draw_snake:
     ; Get Snake Color Brush
-    MOV  RCX, 0x00FFFFFF
+    MOV  RCX, 0x0000FF00   ; 0x00BBGGRR
     CALL CreateSolidBrush
     MOV  R14, RAX          ; brush
 
@@ -516,9 +539,14 @@ SNAKE_LEN       dq 2
 
 APPLE           dd BLOCK_SIDE_LEN*10, BLOCK_SIDE_LEN*20
 
+; Custom Icon Image Data
+ICON_AND_BIT_MASK db 252,0,252,0,252,127,252,127,252,127,252,127,252,127,252,127,252,127,252,127,252,127,252,127,252,127,0,127,0,127,0,127
+ICON_XOR_BIT_MASK dq 0,0,0,0
+
     section .bss
 
 HINSTANCE        resb 8
+HICON            resb 8
 HWND             resb 8
 MSG              resb 48
 SNAKE_BUFFER_PTR resb 8
