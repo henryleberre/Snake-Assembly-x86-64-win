@@ -1,8 +1,9 @@
+    ; All exported functions for the linker
     global _start
     global _window_proc
     global _set_timer_callback
 
-    ; This is getting ridiculous
+    ; All the win32 functions we need to link to
     extern GetModuleHandleA
     extern RegisterClassA
     extern DefWindowProcA
@@ -28,17 +29,48 @@
     extern CreateIcon
     extern DestroyIcon
 
-%define BLOCK_SIDE_LEN  10
-%define BLOCKS_PER_SIDE 50
-%define FRAME_TIME      75
+; Modifiable constants
+%define GRID_SQUARE_SIDE_LENGTH 10 ; # pixels
+%define GRID_SQUARE_SIDE_COUNT  50 ; # squares
+%define FRAME_TIME              75 ; the delta-time in ms between each frame/update.
 
-%define WIDTH  (BLOCK_SIDE_LEN*BLOCKS_PER_SIDE)
-%define HEIGHT (WIDTH)
-%define SNAKE_BUFFER_SIZE (WIDTH * HEIGHT * 2 * 4)
+; Auto-Gnerated Constants
+%define WIDTH             (GRID_SQUARE_SIDE_LENGTH*GRID_SQUARE_SIDE_COUNT) ; The width  in pixels of the window's client area
+%define HEIGHT            (WIDTH)                                          ; The height in pixels of the window's client area
+%define PIXEL_COUNT       (WIDTH*HEIGHT)
+%define SNAKE_BUFFER_SIZE (PIXEL_COUNT * 8)                                ; The size of the buffer containg the snake's body positions' locations (X: DWORD, Y: DWORD)
+
+; Useful Constants For x86-64 Assembly
+%define SHADOW_SPACE_SIZE (20h) ; 20h=0x20=32 (bytes of shadow space).
+%define WORD_SIZE         (2)   ; # bytes
+%define DWORD_SIZE        (4)   ; # bytes
+%define QWORD_SIZE        (8)   ; # bytes
+
+; WIN32 Constants
+%define IDC_CROSS      (32515)
+
+%define WS_OVERLAPPED  (0x00000000)
+%define WS_CAPTION     (0x00C00000)
+%define WS_SYSMENU     (0x00080000)
+%define WS_MINIMIZEBOX (0x00020000)
+%define WS_MAXIMIZEBOX (0x00010000)
+
+; WIN32 x64 type sizes
+%define HWND_SIZE        (QWORD_SIZE)   ; # bytes
+%define PAINTSTRUCT_SIZE (72)           ; # bytes
+%define RECT_SIZE        (4*DWORD_SIZE) ; # bytes
+
+; WIN32 Combined Flags
+%define CUSTOM_WINDOW_DW_STYLE (WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)
+
+; WIN32 Brush 0x00BBGGRR Colors
+%define SNAKE_BRUSH_COLOR      (0x0000FF00)
+%define APPLE_BRUSH_COLOR      (0x000000FF)
+%define BACKGROUND_BRUSH_COLOR (0x00000000)
 
     section .text
 
-_apple_new_position:
+_apple_new_position: ;TODO: Random Position
     MOV  EAX, DWORD[APPLE]
     MOV  EDX, DWORD[APPLE+4]
 
@@ -95,9 +127,9 @@ _update_render_game___repaint:
 _update_render_game___apple_collision:
     ; Check If Head Intersects The Apple
     CMP R12D, DWORD[APPLE]
-    JNE _update_render_game___snake_self_collision
+    JNE _update_render_game___return
     CMP R13D, DWORD[APPLE+4]
-    JNE _update_render_game___snake_self_collision
+    JNE _update_render_game___return
 
     ; Increment the snake length
     MOV RAX, QWORD[SNAKE_LEN]
@@ -105,14 +137,11 @@ _update_render_game___apple_collision:
     MOV QWORD[SNAKE_LEN], RAX
 
     CMP R12D, DWORD[APPLE]
-    JNE _update_render_game___snake_self_collision
+    JNE _update_render_game___return
     CMP R13D, DWORD[APPLE+4]
-    JNE _update_render_game___snake_self_collision
+    JNE _update_render_game___return
 
     call _apple_new_position
-
-_update_render_game___snake_self_collision:
-    ;...
 
 _update_render_game___return:
     RET
@@ -133,15 +162,15 @@ _start:
     MOV  QWORD[HINSTANCE], RAX ; Save hInstance
 
     ; Create The Icon
-    MOV  RCX, RAX ; HINSTANCE
-    MOV  RDX, 16  ; WIDTH
-    MOV  R8,  16  ; HEIGHT
-    MOV  R9,  1   ; # of XOR planes 
-    MOV  QWORD[rsp + 32],      1
-    MOV  QWORD[rsp + 40],      ICON_AND_BIT_MASK
-    MOV  QWORD[rsp + 48],      ICON_XOR_BIT_MASK
+    MOV  RCX,             RAX               ; HINSTANCE
+    MOV  RDX,             16                ; WIDTH
+    MOV  R8,              16                ; HEIGHT
+    MOV  R9,              1                 ; # of XOR planes 
+    MOV  QWORD[rsp + 32], 1                 ; # bits per pixel 
+    MOV  QWORD[rsp + 40], ICON_AND_BIT_MASK ; AND bitmask 
+    MOV  QWORD[rsp + 48], ICON_XOR_BIT_MASK ; XOR bitmask
     CALL CreateIcon
-    MOV  QWORD[HICON],         RAX             ; Save the HICON
+    MOV  QWORD[HICON], RAX ; Save the HICON
 
     ; Create WNDCLASSA
     MOV  DWORD[rsp + 32],      3               ; style
@@ -152,8 +181,8 @@ _start:
     MOV  QWORD[rsp + 32 + 24], RAX             ; hInstance
     MOV  RAX, QWORD[HICON]
     MOV  QWORD[rsp + 32 + 32], RAX             ; hIcon
-    XOR  RCX, RCX   ; HINSTANCE=NULL
-    MOV  RDX, 32515 ; IDC_CROSS
+    XOR  RCX, RCX       ; HINSTANCE=NULL
+    MOV  RDX, IDC_CROSS ; TODO:
     CALL LoadCursorA
     MOV  QWORD[rsp + 32 + 40], RAX             ; hCursor
     MOV  QWORD[rsp + 32 + 48], 0               ; hbrBackground
@@ -172,8 +201,8 @@ _start:
     MOV  DWORD[RSP+32+12], HEIGHT
 
     ; #2 : Obtain The RECT
-    LEA  RCX, [RSP+32]    ; +16?
-    MOV  RDX, 13303808    ; DWORD dwStyle
+    LEA  RCX, [RSP+32]    ; 
+    MOV  RDX, CUSTOM_WINDOW_DW_STYLE ; DWORD dwStyle
     XOR  R8,  R8          ; BOOL  bMenu
     CALL AdjustWindowRect
 
@@ -190,7 +219,7 @@ _start:
     XOR  RCX, RCX             ; dwExStyle
     MOV  RDX, WindowClassName ; lpClassName
     MOV  R8,  WindowName      ; lpWindowName
-    MOV  R9,  13303808        ; dwStyle
+    MOV  R9,  CUSTOM_WINDOW_DW_STYLE        ; dwStyle
 
     MOV  QWORD[RSP + 20h + 56], 0          ; lpParam
     MOV  RAX, QWORD[HINSTANCE]             ; 
@@ -223,11 +252,11 @@ _start_init_game:
     ADD  RSP, 32
 
     ; Set the Head
-    MOV  DWORD[RAX],   (BLOCK_SIDE_LEN*5)
-    MOV  DWORD[RAX+4], (BLOCK_SIDE_LEN*5)
+    MOV  DWORD[RAX],   (GRID_SQUARE_SIDE_LENGTH*5)
+    MOV  DWORD[RAX+4], (GRID_SQUARE_SIDE_LENGTH*5)
 
-    MOV  DWORD[RAX+4+4],   (BLOCK_SIDE_LEN*4)
-    MOV  DWORD[RAX+4+4+4], (BLOCK_SIDE_LEN*5)
+    MOV  DWORD[RAX+4+4],   (GRID_SQUARE_SIDE_LENGTH*4)
+    MOV  DWORD[RAX+4+4+4], (GRID_SQUARE_SIDE_LENGTH*5)
 
     ; Set Timer For Next Update/Draw
     MOV RCX, QWORD[HWND]         ; HNWD
@@ -321,7 +350,7 @@ _window_proc_paint_begin:
 
 _window_proc_paint_draw_backgroud:
     ; Create Background Color Brush
-    MOV  RCX, 0x00000000 ; 0x00BBGGRR
+    MOV  RCX, BACKGROUND_BRUSH_COLOR
     CALL CreateSolidBrush
 
     ; Draw Background
@@ -335,7 +364,7 @@ _window_proc_paint_draw_backgroud:
 
 _window_proc_paint_draw_apple:
     ; Create Apple Color Brush
-    MOV  RCX, 0x000000FF ; 0x00BBGGRR
+    MOV  RCX, APPLE_BRUSH_COLOR
     CALL CreateSolidBrush
 
     ; Create Apple Struct: TODO:: OPTIMIZE GETTING FULL QWORD FROM APPLE (X;Y)
@@ -345,10 +374,10 @@ _window_proc_paint_draw_apple:
     MOV R13D,          DWORD[APPLE+4] ; APPLE.Y
     MOV DWORD[rsp+36], R13D           ; RECT.Top
 
-    ADD R12D,          BLOCK_SIDE_LEN
+    ADD R12D,          GRID_SQUARE_SIDE_LENGTH
     MOV DWORD[rsp+40], R12D           ; Rect.Right
     
-    ADD R13D,          BLOCK_SIDE_LEN
+    ADD R13D,          GRID_SQUARE_SIDE_LENGTH
     MOV DWORD[rsp+44], R13D           ; Rect.Bottom
 
     ; Draw Apple
@@ -362,7 +391,7 @@ _window_proc_paint_draw_apple:
 
 _window_proc_paint_draw_snake:
     ; Get Snake Color Brush
-    MOV  RCX, 0x0000FF00   ; 0x00BBGGRR
+    MOV  RCX, SNAKE_BRUSH_COLOR
     CALL CreateSolidBrush
     MOV  R14, RAX          ; brush
 
@@ -377,12 +406,12 @@ _window_proc_paint_draw_snake_loop:
     ; Create Snake Body Rect
     MOV R15D, DWORD[RSI+R13]
     MOV DWORD[rsp+32], R15D ; Left
-    ADD R15D, BLOCK_SIDE_LEN
+    ADD R15D, GRID_SQUARE_SIDE_LENGTH
     MOV DWORD[rsp+40], R15D ; Right
 
     MOV R15D, DWORD[RSI+R13+4]
     MOV DWORD[rsp+36], R15D ; Top
-    ADD R15D, BLOCK_SIDE_LEN
+    ADD R15D, GRID_SQUARE_SIDE_LENGTH
     MOV DWORD[rsp+44], R15D ; Bottom
 
     SHR R13, 2 ; Undo the magic
@@ -409,14 +438,14 @@ _window_proc_paint_check_border_intersection: ; I don't like the fact that I nee
     MOV R12D, DWORD[R15]
     CMP R12D, 0
     JL  _start_game_over
-    CMP R12D, WIDTH-BLOCK_SIDE_LEN
+    CMP R12D, WIDTH-GRID_SQUARE_SIDE_LENGTH
     JGE _start_game_over
 
     ; Check Y Border Intersection
     MOV R13D, DWORD[R15+4]
     CMP R13D, 0
     JL  _start_game_over
-    CMP R13D, HEIGHT-BLOCK_SIDE_LEN
+    CMP R13D, HEIGHT-GRID_SQUARE_SIDE_LENGTH
     JGE _start_game_over
 
 _window_proc_paint_check_snake_self_intersection:
@@ -493,26 +522,26 @@ window_proc_keydown:
     JMP  window_proc_keydown_epilogue
 
 window_proc_keydown_handle_key_left_arrow:
-    MOV  DWORD[SNAKE_DIR],   -BLOCK_SIDE_LEN
+    MOV  DWORD[SNAKE_DIR],   -GRID_SQUARE_SIDE_LENGTH
     MOV  DWORD[SNAKE_DIR+4], 0
 
     JMP  window_proc_keydown_epilogue
 
 window_proc_keydown_handle_key_right_arrow:
-    MOV  DWORD[SNAKE_DIR],   BLOCK_SIDE_LEN
+    MOV  DWORD[SNAKE_DIR],   GRID_SQUARE_SIDE_LENGTH
     MOV  DWORD[SNAKE_DIR+4], 0
 
     JMP  window_proc_keydown_epilogue
 
 window_proc_keydown_handle_key_up_arrow:
     MOV  DWORD[SNAKE_DIR],   0
-    MOV  DWORD[SNAKE_DIR+4], -BLOCK_SIDE_LEN
+    MOV  DWORD[SNAKE_DIR+4], -GRID_SQUARE_SIDE_LENGTH
 
     JMP  window_proc_keydown_epilogue
 
 window_proc_keydown_handle_key_down_arrow:
     MOV  DWORD[SNAKE_DIR],   0
-    MOV  DWORD[SNAKE_DIR+4], BLOCK_SIDE_LEN
+    MOV  DWORD[SNAKE_DIR+4], GRID_SQUARE_SIDE_LENGTH
 
     JMP  window_proc_keydown_epilogue
 
@@ -532,21 +561,22 @@ window_proc_epilogue:
 
     section .data
 
-WindowClassName db 'Snake x64-64 Class', 0
-WindowName      db 'Snake x86-64',       0
-SNAKE_DIR       dd BLOCK_SIDE_LEN, 0
-SNAKE_LEN       dq 2
+WindowClassName db 'Snake x64-64 Class', 0 ; A null-terminated string containing The window class's name
+WindowName      db 'Snake x86-64',       0 ; A null-terminated string containing the name of the window
+SNAKE_DIR       dd GRID_SQUARE_SIDE_LENGTH,       0 ; Snake Movement Delta (X,Y)
+SNAKE_LEN       dq 2                       ; (head + tail at the beginning)
 
-APPLE           dd BLOCK_SIDE_LEN*10, BLOCK_SIDE_LEN*20
+APPLE           dd GRID_SQUARE_SIDE_LENGTH*10, GRID_SQUARE_SIDE_LENGTH*20 ; Apple Position (X,Y)
 
 ; Custom Icon Image Data
+; Reference on the meaning of these custom values https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-createicon.
 ICON_AND_BIT_MASK db 252,0,252,0,252,127,252,127,252,127,252,127,252,127,252,127,252,127,252,127,252,127,252,127,252,127,0,127,0,127,0,127
 ICON_XOR_BIT_MASK dq 0,0,0,0
 
     section .bss
 
-HINSTANCE        resb 8
-HICON            resb 8
-HWND             resb 8
-MSG              resb 48
-SNAKE_BUFFER_PTR resb 8
+HINSTANCE        resb 8  ; A WIN32 'HINSTANCE' (handle) to current instance/module (here .exe file)
+HICON            resb 8  ; A WIN32 'HICON' (handle) to an icon (here the window's icon)
+HWND             resb 8  ; A WIN32 'HWND'  (handle) to a window
+MSG              resb 48 ; A WIN32 'MSG'  struct containing a window message
+SNAKE_BUFFER_PTR resb 8  ; A pointer to the snake's dynamically allocated buffer containg the positions of his body parts
