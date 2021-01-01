@@ -41,10 +41,11 @@
 %define SNAKE_BUFFER_SIZE (PIXEL_COUNT * 8)                                ; The size of the buffer containg the snake's body positions' locations (X: DWORD, Y: DWORD)
 
 ; Useful Constants For x86-64 Assembly
-%define SHADOW_SPACE_SIZE (20h) ; 20h=0x20=32 (bytes of shadow space).
-%define WORD_SIZE         (2)   ; # bytes
-%define DWORD_SIZE        (4)   ; # bytes
-%define QWORD_SIZE        (8)   ; # bytes
+%define SHADOW_SPACE_SIZE (20h)        ; 20h=0x20=32 (bytes of shadow space).
+%define WORD_SIZE         (2)          ; # bytes
+%define DWORD_SIZE        (4)          ; # bytes
+%define QWORD_SIZE        (8)          ; # bytes
+%define POINTER_SIZE      (QWORD_SIZE) ; # bytes
 
 ; WIN32 Constants
 %define IDC_CROSS      (32515)
@@ -55,10 +56,27 @@
 %define WS_MINIMIZEBOX (0x00020000)
 %define WS_MAXIMIZEBOX (0x00010000)
 
+%define CW_USEDEFAULT  (0x80000000)
+
+%define SW_SHOW (0x5)
+
+%define WM_CLOSE   (0x0010)
+%define WM_DESTROY (0x0002)
+%define WM_KEYDOWN (0x0100)
+%define WM_PAINT   (0x000F)
+
+%define VK_LEFT  (0x25)
+%define VK_RIGHT (0x27)
+%define VK_UP    (0x26)
+%define VK_DOWN  (0x28)
+
+%define RDW_INVALIDATE (0x1)
+
 ; WIN32 x64 type sizes
 %define HWND_SIZE        (QWORD_SIZE)   ; # bytes
 %define PAINTSTRUCT_SIZE (72)           ; # bytes
 %define RECT_SIZE        (4*DWORD_SIZE) ; # bytes
+%define HANDLE_SIZE      (POINTER_SIZE) ; # bytes
 
 ; WIN32 Combined Flags
 %define CUSTOM_WINDOW_DW_STYLE (WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)
@@ -68,8 +86,18 @@
 %define APPLE_BRUSH_COLOR      (0x000000FF)
 %define BACKGROUND_BRUSH_COLOR (0x00000000)
 
+
+
+
     section .text
 
+
+
+
+; <<< Start of function _apple_new_position >>>
+
+; Changes The Apple's Position
+; C-style syntax: void _apple_new_position(void)
 _apple_new_position: ;TODO: Random Position
     MOV  EAX, DWORD[APPLE]
     MOV  EDX, DWORD[APPLE+4]
@@ -78,17 +106,21 @@ _apple_new_position: ;TODO: Random Position
     MOV  DWORD[APPLE+4], EAX
     RET
 
+; <<< End of function _apple_new_position >>>
 
 
-_update_render_game:
-_update_render_game___update:
+; <<< Start of function move_snake_and_render >>>
+; Renders the game and moves the snake (w/o checking for intersections)
+; C-style syntax: void move_snake_and_render(void)
+move_snake_and_render:
+move_snake_and_render___update:
     MOV R15, QWORD[SNAKE_BUFFER_PTR]
 
     ; Move the rest of the body starting from the part just after the head
     MOV R9, QWORD[SNAKE_LEN]
     SHL R9, 3 ; Multiply by 8 (2 dwords): current offset
 
-_update_render_game___move_body_loop: ; Probably doesn't work for a snake size > 2
+move_snake_and_render___move_body_loop: ; Probably doesn't work for a snake size > 2
     ; Update X
     MOV R10D, DWORD[R15+R9-8]
     MOV DWORD[R15+R9], R10D
@@ -100,9 +132,9 @@ _update_render_game___move_body_loop: ; Probably doesn't work for a snake size >
     ; Handle Loop
     SUB R9, 8
     CMP R9, 8
-    JGE _update_render_game___move_body_loop
+    JGE move_snake_and_render___move_body_loop
 
-_update_render_game___move_head:
+move_snake_and_render___move_head:
     ; Move Head X
     MOV R12D, DWORD[R15]
     ADD R12D, DWORD[SNAKE_DIR] 
@@ -113,23 +145,23 @@ _update_render_game___move_head:
     ADD R13D, DWORD[SNAKE_DIR+4] 
     MOV DWORD[R15+4], R13D
 
-_update_render_game___repaint:
-    SUB  RSP, 32            ; Shadow Space
+move_snake_and_render___repaint:
+    SUB  RSP, SHADOW_SPACE_SIZE
 
     MOV  RCX, QWORD[HWND]
     XOR  RDX, RDX
     XOR  R8,  R8
-    MOV  R9,  1             ; RDW_INVALIDATE
+    MOV  R9,  RDW_INVALIDATE
     CALL RedrawWindow
 
-    ADD  RSP, 32            ; Shadow Space
+    ADD  RSP, SHADOW_SPACE_SIZE
 
-_update_render_game___apple_collision:
+move_snake_and_render___apple_collision:
     ; Check If Head Intersects The Apple
     CMP R12D, DWORD[APPLE]
-    JNE _update_render_game___return
+    JNE move_snake_and_render___return
     CMP R13D, DWORD[APPLE+4]
-    JNE _update_render_game___return
+    JNE move_snake_and_render___return
 
     ; Increment the snake length
     MOV RAX, QWORD[SNAKE_LEN]
@@ -137,18 +169,21 @@ _update_render_game___apple_collision:
     MOV QWORD[SNAKE_LEN], RAX
 
     CMP R12D, DWORD[APPLE]
-    JNE _update_render_game___return
+    JNE move_snake_and_render___return
     CMP R13D, DWORD[APPLE+4]
-    JNE _update_render_game___return
+    JNE move_snake_and_render___return
 
     call _apple_new_position
 
-_update_render_game___return:
+move_snake_and_render___return:
     RET
 
+; <<< End of function move_snake_and_render >>>
 
 
-
+; <<< Start of function _start >>>
+; The application's entry point
+; C-style syntax: void _start(void)
 _start:
     ; Prologue
     PUSH RBP
@@ -156,100 +191,101 @@ _start:
 
     SUB  RSP, 112 ; MEMORY used for RECT & WNDCLASSA + SHADOW
 
-    ; Get HINSTANCE
-    XOR  RCX, RCX
-    CALL GetModuleHandleA
-    MOV  QWORD[HINSTANCE], RAX ; Save hInstance
+    ; Obtain the module's instance handle
+    XOR  RCX, RCX               ; Param #1: LPCSTR lpModuleName = NULL
+    CALL GetModuleHandleA       ; Call the win32 function GetModuleHandleA
+    MOV  QWORD[HINSTANCE], RAX  ; Save the module's HINSTANCE
 
-    ; Create The Icon
-    MOV  RCX,             RAX               ; HINSTANCE
-    MOV  RDX,             16                ; WIDTH
-    MOV  R8,              16                ; HEIGHT
-    MOV  R9,              1                 ; # of XOR planes 
-    MOV  QWORD[rsp + 32], 1                 ; # bits per pixel 
-    MOV  QWORD[rsp + 40], ICON_AND_BIT_MASK ; AND bitmask 
-    MOV  QWORD[rsp + 48], ICON_XOR_BIT_MASK ; XOR bitmask
-    CALL CreateIcon
-    MOV  QWORD[HICON], RAX ; Save the HICON
+    ; Create the window's icon
+    MOV  RCX,                                           RAX               ; Param #1: HINSTANCE
+    MOV  RDX,                                           16                ; Param #2: WIDTH  in # of pixels
+    MOV  R8,                                            16                ; Param #3: HEIGHT in # of pixels
+    MOV  R9,                                            1                 ; Param #4: # of XOR  planes 
+    MOV  QWORD[rsp + SHADOW_SPACE_SIZE + 0*QWORD_SIZE], 1                 ; Param #5: # of bits per pixel 
+    MOV  QWORD[rsp + SHADOW_SPACE_SIZE + 1*QWORD_SIZE], ICON_AND_BIT_MASK ; Param #6: AND bitmask*
+    MOV  QWORD[rsp + SHADOW_SPACE_SIZE + 2*QWORD_SIZE], ICON_XOR_BIT_MASK ; Param #7: XOR bitmask*
+    CALL CreateIcon                                                       ; call win32 function CreateIcon
+    MOV  QWORD[HICON], RAX                                                ; Save the HICON
 
-    ; Create WNDCLASSA
-    MOV  DWORD[rsp + 32],      3               ; style
-    MOV  QWORD[rsp + 32 + 8],  _window_proc    ; lpfnWndProc
-    MOV  DWORD[rsp + 32 + 16], 0               ; cbClsExtra
-    MOV  DWORD[rsp + 32 + 20], 0               ; cbWndExtra
+    ; Create the WNDCLASSA structure needed to create the window
+    MOV  DWORD[rsp + SHADOW_SPACE_SIZE],                               3               ; WNDCLASSA.style
+    MOV  QWORD[rsp + SHADOW_SPACE_SIZE + 1*QWORD_SIZE],                _window_proc    ; WNDCLASSA.lpfnWndProc
+    MOV  DWORD[rsp + SHADOW_SPACE_SIZE + 2*QWORD_SIZE],                0               ; WNDCLASSA.cbClsExtra
+    MOV  DWORD[rsp + SHADOW_SPACE_SIZE + 2*QWORD_SIZE + 1*DWORD_SIZE], 0               ; WNDCLASSA.cbWndExtra
     MOV  RAX, QWORD[HINSTANCE]
-    MOV  QWORD[rsp + 32 + 24], RAX             ; hInstance
+    MOV  QWORD[rsp + SHADOW_SPACE_SIZE + 3*QWORD_SIZE],                RAX             ; WNDCLASSA.hInstance
     MOV  RAX, QWORD[HICON]
-    MOV  QWORD[rsp + 32 + 32], RAX             ; hIcon
-    XOR  RCX, RCX       ; HINSTANCE=NULL
-    MOV  RDX, IDC_CROSS ; TODO:
-    CALL LoadCursorA
-    MOV  QWORD[rsp + 32 + 40], RAX             ; hCursor
-    MOV  QWORD[rsp + 32 + 48], 0               ; hbrBackground
-    MOV  QWORD[rsp + 32 + 56], 0               ; lpszMenuName
-    MOV  QWORD[rsp + 32 + 64], WindowClassName ; lpszClassName
+    MOV  QWORD[rsp + SHADOW_SPACE_SIZE + 4*QWORD_SIZE],                RAX             ; WNDCLASSA.hIcon
+
+    XOR  RCX, RCX       ; Parameter #1: HINSTANCE hInstance    = NULL
+    MOV  RDX, IDC_CROSS ; Parameter #2: LPCSTR    lpCursorName = IDC_CROSS
+    CALL LoadCursorA    ; Call the win32 function LoadCursorA to get a handle to the desired cursor
+
+    MOV  QWORD[rsp + SHADOW_SPACE_SIZE + 5*QWORD_SIZE],                RAX             ; WNDCLASSA.hCursor
+    MOV  QWORD[rsp + SHADOW_SPACE_SIZE + 6*QWORD_SIZE],                0               ; WNDCLASSA.hbrBackground
+    MOV  QWORD[rsp + SHADOW_SPACE_SIZE + 7*QWORD_SIZE],                0               ; WNDCLASSA.lpszMenuName
+    MOV  QWORD[rsp + SHADOW_SPACE_SIZE + 8*QWORD_SIZE],                WindowClassName ; WNDCLASSA.lpszClassName
 
     ; Register The Window Class
-    LEA  RCX, [RSP + 32] ; WNDCLASSA*
-    CALL RegisterClassA
+    LEA  RCX, [RSP + SHADOW_SPACE_SIZE] ; Parameter #1: WNDCLASSA* lpWndClass
+    CALL RegisterClassA                 ; Call the win32 function RegisterClassA to register the window class that we just defined
 
     ; Get The Desired Window's Rect From The Client's Rect
-    ; #1 : Create The RECT
-    MOV  DWORD[RSP+32],    0        ; coud be simplified to MOV QWORD..., 0
-    MOV  DWORD[RSP+32+4],  0        ; 
-    MOV  DWORD[RSP+32+8],  WIDTH
-    MOV  DWORD[RSP+32+12], HEIGHT
+    ; #1 : Create The RECT structre of the desired client area
+    MOV  DWORD[RSP + SHADOW_SPACE_SIZE + 0*DWORD_SIZE], 0      ; RECT.left   (CLIENT) in # of pixels
+    MOV  DWORD[RSP + SHADOW_SPACE_SIZE + 1*DWORD_SIZE], 0      ; RECT.top    (CLIENT) in # of pixels
+    MOV  DWORD[RSP + SHADOW_SPACE_SIZE + 2*DWORD_SIZE], WIDTH  ; RECT.right  (CLIENT) in # of pixels
+    MOV  DWORD[RSP + SHADOW_SPACE_SIZE + 3*DWORD_SIZE], HEIGHT ; RECT.bottom (CLIENT) in # of pixels
 
-    ; #2 : Obtain The RECT
-    LEA  RCX, [RSP+32]    ; 
-    MOV  RDX, CUSTOM_WINDOW_DW_STYLE ; DWORD dwStyle
-    XOR  R8,  R8          ; BOOL  bMenu
-    CALL AdjustWindowRect
+    ; #2 : Obtain the RECT corresponding the window's actual size
+    LEA  RCX, [RSP + SHADOW_SPACE_SIZE] ; Parameter #1: RECT* lpRect  (CLIENT)
+    MOV  RDX, CUSTOM_WINDOW_DW_STYLE    ; Parameter #2: DWORD dwStyle
+    XOR  R8,  R8                        ; Parameter #3: BOOL  bMenu
+    CALL AdjustWindowRect               ; Call the win32 function AdjustWindowRect. The desired rect replaces the rect we supplied.
 
-    ; #3 : Extract The Required Client Area Dimensions
-    MOV  R11D, DWORD[RSP+32]     ; WindowRECT.LEFT
-    MOV  R10D, DWORD[RSP+32+8]   ; WindowRECT.RIGHT
-    SUB  R10D, R11D              ; Actual Window Width
+    ; #3 : Extract the required window's dimensions
+    MOV  R11D, DWORD[RSP + SHADOW_SPACE_SIZE]                ; RECT.LEFT  (WINDOW)
+    MOV  R10D, DWORD[RSP + SHADOW_SPACE_SIZE + 2*DWORD_SIZE] ; RECT.RIGHT (WINDOW)
+    SUB  R10D, R11D                                          ; Actual Window Width
 
-    MOV  R12D, DWORD[RSP+32+4]   ; WindowRECT.TOP
-    MOV  R11D, DWORD[RSP+32+12]  ; WindowRECT.BOTTOM
-    SUB  R11D, R12D              ; Actual Window HEIGHT
+    MOV  R12D, DWORD[RSP + SHADOW_SPACE_SIZE + 1*DWORD_SIZE] ; WindowRECT.TOP
+    MOV  R11D, DWORD[RSP + SHADOW_SPACE_SIZE + 3*DWORD_SIZE] ; WindowRECT.BOTTOM
+    SUB  R11D, R12D                                          ; Actual Window Height
 
-    ; Create The Window
-    XOR  RCX, RCX             ; dwExStyle
-    MOV  RDX, WindowClassName ; lpClassName
-    MOV  R8,  WindowName      ; lpWindowName
-    MOV  R9,  CUSTOM_WINDOW_DW_STYLE        ; dwStyle
-
-    MOV  QWORD[RSP + 20h + 56], 0          ; lpParam
-    MOV  RAX, QWORD[HINSTANCE]             ; 
-    MOV  QWORD[RSP + 20h + 48], RAX        ; hInstance
-    MOV  QWORD[RSP + 20h + 40], 0          ; hMenu
-    MOV  QWORD[RSP + 20h + 32], 0          ; hWndParent
-    MOV  DWORD[RSP + 20h + 24], R11D       ; nHeight
-    MOV  DWORD[RSP + 20h + 16], R10D       ; nWidth
-    MOV  QWORD[RSP + 20h + 8],  0x80000000 ; Y
-    MOV  QWORD[RSP + 20h],      0x80000000 ; X
-
-    CALL CreateWindowExA
+    ; Create the window
+    XOR  RCX, RCX                                                     ; Parameter #1:  dwExStyle
+    MOV  RDX, WindowClassName                                         ; Parameter #2:  lpClassName
+    MOV  R8,  WindowName                                              ; Parameter #3:  lpWindowName
+    MOV  R9,  CUSTOM_WINDOW_DW_STYLE                                  ; Parameter #4:  dwStyle
+    MOV  QWORD[RSP + SHADOW_SPACE_SIZE + 0*QWORD_SIZE], CW_USEDEFAULT ; Parameter #5:  window x position in # of pixels
+    MOV  QWORD[RSP + SHADOW_SPACE_SIZE + 1*QWORD_SIZE], CW_USEDEFAULT ; Parameter #6:  window y position in # of pixels
+    MOV  DWORD[RSP + SHADOW_SPACE_SIZE + 2*QWORD_SIZE], R10D          ; Parameter #7:  window width  in # of pixels
+    MOV  DWORD[RSP + SHADOW_SPACE_SIZE + 3*QWORD_SIZE], R11D          ; Parameter #8:  window height in # of pixels
+    MOV  QWORD[RSP + SHADOW_SPACE_SIZE + 4*QWORD_SIZE], 0             ; Parameter #9:  hWndParent
+    MOV  QWORD[RSP + SHADOW_SPACE_SIZE + 5*QWORD_SIZE], 0             ; Parameter #10: hMenu
+    MOV  RAX, QWORD[HINSTANCE]                                        ;
+    MOV  QWORD[RSP + SHADOW_SPACE_SIZE + 6*QWORD_SIZE], RAX           ; Parameter #11: hInstance
+    MOV  QWORD[RSP + SHADOW_SPACE_SIZE + 7*QWORD_SIZE], 0             ; Parameter #12: lpParam
+    CALL CreateWindowExA                                              ; Call the win32 function CreateWindowExA
+    
     MOV  QWORD[HWND], RAX ; Save the window handle
 
-    ; Show The Window
-    MOV  RCX, QWORD[HWND]
-    MOV  RDX, 5
-    CALL ShowWindow
+    ; Show the window to the user
+    MOV  RCX, QWORD[HWND] ; Parameter #1: HWND hWnd     : handle to the window
+    MOV  RDX, SW_SHOW     ; Parameter #2: int  nCmdShow : flag
+    CALL ShowWindow       ; Call the win32 function ShowWindow
 
-    ADD  RSP, 112
+    ADD  RSP, 112 ; Free the used stack spaced
 
 _start_init_game:
-    SUB  RSP, 32
+    SUB  RSP, SHADOW_SPACE_SIZE
     ; Allocate the snake
     XOR  RCX, RCX                     ; uFlags:  GMEM_FIXED
     MOV  RDX, SNAKE_BUFFER_SIZE       ; dwBytes: SNAKE_BUFFER_SIZE
     CALL GlobalAlloc                  ;
     MOV  QWORD[SNAKE_BUFFER_PTR], RAX ; Save the buffer pointer
 
-    ADD  RSP, 32
+    ADD  RSP, SHADOW_SPACE_SIZE
 
     ; Set the Head
     MOV  DWORD[RAX],   (GRID_SQUARE_SIDE_LENGTH*5)
@@ -262,7 +298,7 @@ _start_init_game:
     MOV RCX, QWORD[HWND]         ; HNWD
     MOV RDX, 1                   ; Timer ID 1 (Update/Draw Timer ID)
     MOV R8,  FRAME_TIME          ;
-    MOV R9,  _update_render_game ;
+    MOV R9,  move_snake_and_render ;
     call SetTimer
 
 _start_program_loop:
@@ -273,7 +309,7 @@ _start_program_loop_message_loop:
     XOR  RDX, RDX  ; Null handle to get WM_QUIT message
     XOR  R8,  R8   ;
     XOR  R9,  R9   ;
-    MOV  DWORD[RSP + 20h], 1
+    MOV  DWORD[RSP + SHADOW_SPACE_SIZE], 1
     CALL PeekMessageA
 
     ADD  RSP, 40
@@ -284,7 +320,7 @@ _start_program_loop_message_loop:
     CMP  DWORD[MSG+8], 12h  ; Compare MSG.message and WM_QUIT
     JE   _start_epilogue
 
-    SUB  RSP, 32
+    SUB  RSP, SHADOW_SPACE_SIZE
 
     LEA  RCX, [MSG]
     CALL TranslateMessage
@@ -292,7 +328,7 @@ _start_program_loop_message_loop:
     LEA  RCX, [MSG]
     CALL DispatchMessageA
 
-    ADD  RSP, 32
+    ADD  RSP, SHADOW_SPACE_SIZE
 
 _start_program_loop_next:
     JMP  _start_program_loop
@@ -313,29 +349,33 @@ _start_epilogue:
 
     ; Exit Process
     XOR  RCX, RCX
-    SUB  RSP, 32
+    SUB  RSP, SHADOW_SPACE_SIZE
     CALL ExitProcess
-    ADD  RSP, 32
+    ADD  RSP, SHADOW_SPACE_SIZE
 
     ; Return Value
     XOR  RAX, RAX
     RET
 
 
+; <<< End of function _start >>>
 
 
+; <<< Start of function _window_proc >>>
+; The WIN32 WindowProc callback function which receives and treats window events
+; C-style syntax: u64 _window_proc(HWND hwnd, u32 uMsg, u64 wParam, u64 lParam);
 _window_proc:
     PUSH RBP
     MOV  RBP, RSP
 
-    CMP  RDX, 0x10           ; WM_CLOSE
-    JE   window_proc_close
-    CMP  RDX, 0x2            ; WM_DESTROY
-    JE   window_proc_destroy
-    CMP  RDX, 0x100          ; WM_KEYDOWN
-    JE   window_proc_keydown
-    CMP  RDX, 0xF            ; WM_PAINT
-    jne  window_proc_default
+    CMP  RDX, WM_CLOSE
+    JE   _window_proc_close
+    CMP  RDX, WM_DESTROY
+    JE   _window_proc_destroy
+    CMP  RDX, WM_KEYDOWN
+    JE   _window_proc_keydown
+    CMP  RDX, WM_PAINT
+    jne  _window_proc_default
 
 _window_proc_paint:
     SUB RSP, 136; 20h+72+8
@@ -369,16 +409,16 @@ _window_proc_paint_draw_apple:
 
     ; Create Apple Struct: TODO:: OPTIMIZE GETTING FULL QWORD FROM APPLE (X;Y)
     MOV R12D,          DWORD[APPLE]   ; APPLE.X
-    MOV DWORD[rsp+32], R12D           ; RECT.Left
+    MOV DWORD[rsp+SHADOW_SPACE_SIZE], R12D           ; RECT.Left
     
     MOV R13D,          DWORD[APPLE+4] ; APPLE.Y
-    MOV DWORD[rsp+36], R13D           ; RECT.Top
+    MOV DWORD[rsp+SHADOW_SPACE_SIZE+4], R13D           ; RECT.Top
 
     ADD R12D,          GRID_SQUARE_SIDE_LENGTH
-    MOV DWORD[rsp+40], R12D           ; Rect.Right
+    MOV DWORD[rsp+SHADOW_SPACE_SIZE+4+4], R12D           ; Rect.Right
     
     ADD R13D,          GRID_SQUARE_SIDE_LENGTH
-    MOV DWORD[rsp+44], R13D           ; Rect.Bottom
+    MOV DWORD[rsp+SHADOW_SPACE_SIZE+4+4+4], R13D           ; Rect.Bottom
 
     ; Draw Apple
     MOV  RCX, RBX      ; hdc
@@ -405,14 +445,14 @@ _window_proc_paint_draw_snake_loop:
 
     ; Create Snake Body Rect
     MOV R15D, DWORD[RSI+R13]
-    MOV DWORD[rsp+32], R15D ; Left
+    MOV DWORD[rsp+SHADOW_SPACE_SIZE], R15D ; Left
     ADD R15D, GRID_SQUARE_SIDE_LENGTH
-    MOV DWORD[rsp+40], R15D ; Right
+    MOV DWORD[rsp+SHADOW_SPACE_SIZE+4+4], R15D ; Right
 
     MOV R15D, DWORD[RSI+R13+4]
-    MOV DWORD[rsp+36], R15D ; Top
+    MOV DWORD[rsp+SHADOW_SPACE_SIZE+4], R15D ; Top
     ADD R15D, GRID_SQUARE_SIDE_LENGTH
-    MOV DWORD[rsp+44], R15D ; Bottom
+    MOV DWORD[rsp+SHADOW_SPACE_SIZE+4+4+4], R15D ; Bottom
 
     SHR R13, 2 ; Undo the magic
 
@@ -488,78 +528,86 @@ _window_proc_paint_end:
     ADD  RSP, 136
 
     XOR  RAX, RAX
-    JMP  window_proc_epilogue
+    JMP  _window_proc_epilogue
 
-window_proc_close:
-    SUB  RSP, 20h
+_window_proc_close:
+    SUB  RSP, SHADOW_SPACE_SIZE
     CALL DestroyWindow
-    ADD  RSP, 20h
+    ADD  RSP, SHADOW_SPACE_SIZE
 
     XOR  RAX, RAX
-    JMP  window_proc_epilogue
+    JMP  _window_proc_epilogue
 
-window_proc_destroy:
-    SUB  RSP, 20h
+_window_proc_destroy:
+    SUB  RSP, SHADOW_SPACE_SIZE
     XOR  RCX, RCX
     CALL PostQuitMessage
-    ADD  RSP, 20h
+    ADD  RSP, SHADOW_SPACE_SIZE
 
     XOR  RAX, RAX
-    JMP  window_proc_epilogue
+    JMP  _window_proc_epilogue
 
-window_proc_keydown:
+_window_proc_keydown:
     XOR  RAX, RAX ; Set return value
 
     ; Test KeyCodes: Keycode in R8 (wParam)
-    CMP  R8, 0x25 ; Left
-    JE   window_proc_keydown_handle_key_left_arrow
-    CMP  R8, 0x27 ; Right
-    JE   window_proc_keydown_handle_key_right_arrow
-    CMP  R8, 0x26 ; Up
-    JE   window_proc_keydown_handle_key_up_arrow
-    CMP  R8, 0x28 ; Down
-    JE   window_proc_keydown_handle_key_down_arrow
-    JMP  window_proc_keydown_epilogue
+    CMP  R8, VK_LEFT
+    JE   _window_proc_keydown_handle_key_left_arrow
+    CMP  R8, VK_RIGHT
+    JE   _window_proc_keydown_handle_key_right_arrow
+    CMP  R8, VK_UP
+    JE   _window_proc_keydown_handle_key_up_arrow
+    CMP  R8, VK_DOWN
+    JE   _window_proc_keydown_handle_key_down_arrow
+    JMP  _window_proc_keydown_epilogue
 
-window_proc_keydown_handle_key_left_arrow:
+_window_proc_keydown_handle_key_left_arrow:
     MOV  DWORD[SNAKE_DIR],   -GRID_SQUARE_SIDE_LENGTH
     MOV  DWORD[SNAKE_DIR+4], 0
 
-    JMP  window_proc_keydown_epilogue
+    JMP  _window_proc_keydown_epilogue
 
-window_proc_keydown_handle_key_right_arrow:
+_window_proc_keydown_handle_key_right_arrow:
     MOV  DWORD[SNAKE_DIR],   GRID_SQUARE_SIDE_LENGTH
     MOV  DWORD[SNAKE_DIR+4], 0
 
-    JMP  window_proc_keydown_epilogue
+    JMP  _window_proc_keydown_epilogue
 
-window_proc_keydown_handle_key_up_arrow:
+_window_proc_keydown_handle_key_up_arrow:
     MOV  DWORD[SNAKE_DIR],   0
     MOV  DWORD[SNAKE_DIR+4], -GRID_SQUARE_SIDE_LENGTH
 
-    JMP  window_proc_keydown_epilogue
+    JMP  _window_proc_keydown_epilogue
 
-window_proc_keydown_handle_key_down_arrow:
+_window_proc_keydown_handle_key_down_arrow:
     MOV  DWORD[SNAKE_DIR],   0
     MOV  DWORD[SNAKE_DIR+4], GRID_SQUARE_SIDE_LENGTH
 
-    JMP  window_proc_keydown_epilogue
+    JMP  _window_proc_keydown_epilogue
 
-window_proc_keydown_epilogue:
+_window_proc_keydown_epilogue:
     XOR  RAX, RAX
-    JMP  window_proc_epilogue
+    JMP  _window_proc_epilogue
 
-window_proc_default:
-    SUB  RSP, 20h
+_window_proc_default:
+    SUB  RSP, SHADOW_SPACE_SIZE
     CALL DefWindowProcA
-    ADD  RSP, 20h
+    ADD  RSP, SHADOW_SPACE_SIZE
 
-window_proc_epilogue:
+_window_proc_epilogue:
     MOV  RSP, RBP
     POP  RBP
     RET
 
+; <<< End of function _window_proc >>>
+
+
+
+
     section .data
+
+
+
 
 WindowClassName db 'Snake x64-64 Class', 0 ; A null-terminated string containing The window class's name
 WindowName      db 'Snake x86-64',       0 ; A null-terminated string containing the name of the window
@@ -573,10 +621,16 @@ APPLE           dd GRID_SQUARE_SIDE_LENGTH*10, GRID_SQUARE_SIDE_LENGTH*20 ; Appl
 ICON_AND_BIT_MASK db 252,0,252,0,252,127,252,127,252,127,252,127,252,127,252,127,252,127,252,127,252,127,252,127,252,127,0,127,0,127,0,127
 ICON_XOR_BIT_MASK dq 0,0,0,0
 
+
+
+
     section .bss
 
-HINSTANCE        resb 8  ; A WIN32 'HINSTANCE' (handle) to current instance/module (here .exe file)
-HICON            resb 8  ; A WIN32 'HICON' (handle) to an icon (here the window's icon)
-HWND             resb 8  ; A WIN32 'HWND'  (handle) to a window
-MSG              resb 48 ; A WIN32 'MSG'  struct containing a window message
-SNAKE_BUFFER_PTR resb 8  ; A pointer to the snake's dynamically allocated buffer containg the positions of his body parts
+
+
+
+HINSTANCE        resb HANDLE_SIZE  ; A WIN32 'HINSTANCE' (handle) to current instance/module (here .exe file)
+HICON            resb HANDLE_SIZE  ; A WIN32 'HICON' (handle) to an icon (here the window's icon)
+HWND             resb HANDLE_SIZE  ; A WIN32 'HWND'  (handle) to a window
+MSG              resb 48           ; A WIN32 'MSG'  struct containing a window message
+SNAKE_BUFFER_PTR resb POINTER_SIZE ; A pointer to the snake's dynamically allocated buffer containg the positions of his body parts
